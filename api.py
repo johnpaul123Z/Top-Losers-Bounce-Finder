@@ -89,6 +89,39 @@ def empty_results_payload() -> dict:
     }
 
 
+def _load_cached_results() -> Optional[dict]:
+    if not RESULTS_CACHE_PATH.exists():
+        return None
+    try:
+        return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _cache_is_for_today(payload: dict) -> bool:
+    ts = payload.get("generatedAt")
+    if not ts:
+        return False
+    try:
+        generated = datetime.fromisoformat(ts)
+        if generated.tzinfo is None:
+            generated = generated.replace(tzinfo=timezone.utc)
+        return generated.astimezone(timezone.utc).date() == datetime.now(timezone.utc).date()
+    except Exception:
+        return False
+
+
+def _rebuild_results_cache() -> dict:
+    ranked = build_rankings(top_n=50)
+    if ranked.empty:
+        payload = empty_results_payload()
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        RESULTS_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return payload
+    export_json(ranked, str(RESULTS_CACHE_PATH))
+    return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "ts": now_iso()}
@@ -96,10 +129,11 @@ def health() -> dict:
 
 @app.get("/api/results")
 def get_results(_: None = Depends(require_dashboard_token)) -> dict:
-    # Serve cached results so page views do not trigger model reruns.
-    if RESULTS_CACHE_PATH.exists():
-        return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
-    return empty_results_payload()
+    # Serve cache; rebuild only if missing/stale, then reuse for rest of day.
+    cached = _load_cached_results()
+    if cached and _cache_is_for_today(cached):
+        return cached
+    return _rebuild_results_cache()
 
 
 @app.post("/api/refresh-results")
@@ -108,15 +142,7 @@ def refresh_results(_: None = Depends(require_dashboard_token)) -> dict:
     Rebuild probability rankings and overwrite cache.
     Intended for cron/manual refresh, not for every page view.
     """
-    ranked = build_rankings(top_n=50)
-    if ranked.empty:
-        payload = empty_results_payload()
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        RESULTS_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return payload
-
-    export_json(ranked, str(RESULTS_CACHE_PATH))
-    return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
+    return _rebuild_results_cache()
 
 
 @app.get("/api/trades")
