@@ -238,11 +238,12 @@ function App() {
               <article className="card">
                 <h3>Trading Plan</h3>
                 <ul className="plan-list">
-                  <li>Run the model once in the morning and cache the ranked results.</li>
-                  <li>Buy 100 shares of the top bounce-probability ticker.</li>
-                  <li>Use bracket risk controls: 5% take-profit and 2% stop-loss.</li>
-                  <li>Do not duplicate buys for the same symbol on the same day.</li>
-                  <li>Review P/L, open positions, and order history daily.</li>
+                  <li>Fully automated pipeline runs each morning with no manual stock selection.</li>
+                  <li>The model refreshes and caches the ranked bounce candidates automatically.</li>
+                  <li>The system auto-buys 100 shares of the highest bounce-probability ticker.</li>
+                  <li>Bracket exits are auto-attached: 5% take-profit and 2% stop-loss.</li>
+                  <li>Duplicate same-day buys for the same symbol are automatically blocked.</li>
+                  <li>P/L, open positions, and order history update automatically in the dashboard.</li>
                 </ul>
               </article>
             </section>

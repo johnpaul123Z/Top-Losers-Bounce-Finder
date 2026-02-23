@@ -24,7 +24,7 @@ services:
   - type: cron
     name: ai-bounce-finder-daily-trade
     env: python
-    schedule: "30 13 * * 1-5"
+    schedule: "40 14 * * 1-5"
     buildCommand: pip install -r requirements.txt
     startCommand: python trade_top_pick.py --shares 100 --take-profit-pct 5 --stop-loss-pct 2 --require-market-open
     envVars:
