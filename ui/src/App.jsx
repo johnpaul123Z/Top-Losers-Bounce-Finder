@@ -136,6 +136,14 @@ function App() {
                     <li key={signal}>{signal}</li>
                   ))}
                 </ul>
+                <h3>How Bounce Predictions Are Made</h3>
+                <p>
+                  For each stock, the model compares today&apos;s setup to past
+                  setups using RSI, volatility, price distance from trend, wick
+                  behavior, volume pressure, and daily return. It then outputs a
+                  bounce probability score based on how often similar patterns
+                  led to a short-term rebound in historical data.
+                </p>
               </article>
 
               <article className="card">
