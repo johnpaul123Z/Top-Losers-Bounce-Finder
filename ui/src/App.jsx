@@ -119,28 +119,6 @@ function App() {
               </article>
             </section>
 
-            <section className="card">
-              <div className="table-head">
-                <h3>Account Overview</h3>
-                <p>Generated: {trades?.generatedAt ? new Date(trades.generatedAt).toLocaleString() : "-"}</p>
-              </div>
-              <div className="kv-grid">
-                <div><span>Status</span><strong>{trades?.account?.status ?? "-"}</strong></div>
-                <div><span>Buying Power</span><strong>{money(trades?.account?.buyingPower)}</strong></div>
-                <div><span>Cash</span><strong>{money(trades?.account?.cash)}</strong></div>
-                <div><span>Equity</span><strong>{money(trades?.account?.equity)}</strong></div>
-                <div><span>Last Equity</span><strong>{money(trades?.account?.lastEquity)}</strong></div>
-                <div>
-                  <span>Daily P/L</span>
-                  <strong className={(trades?.summary?.dailyPnl ?? 0) >= 0 ? "up" : "down"}>
-                    {money(trades?.summary?.dailyPnl)}
-                  </strong>
-                </div>
-                <div><span>Open Positions MV</span><strong>{money(trades?.summary?.marketValueOpenPositions)}</strong></div>
-                <div><span>Total Orders</span><strong>{trades?.summary?.allOrders ?? 0}</strong></div>
-              </div>
-            </section>
-
             <section className="grid split">
               <article className="card">
                 <h3>Project Explanation</h3>
