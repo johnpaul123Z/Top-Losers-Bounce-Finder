@@ -134,6 +134,47 @@ ul {
   color: #cbd5e1;
 }
 
+.plan-list li {
+  margin-bottom: 0.4rem;
+}
+
+.chart-wrap {
+  width: 100%;
+  overflow: hidden;
+}
+
+.pnl-chart {
+  width: 100%;
+  height: 180px;
+  display: block;
+}
+
+.chart-zero {
+  stroke: rgba(148, 163, 184, 0.35);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+
+.chart-line {
+  fill: none;
+  stroke: #22c55e;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-dot {
+  fill: #22c55e;
+  stroke: #0f172a;
+  stroke-width: 2;
+}
+
+.chart-caption {
+  margin-top: 0.4rem;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
 .table-head {
   display: flex;
   justify-content: space-between;

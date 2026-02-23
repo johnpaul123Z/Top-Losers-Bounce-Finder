@@ -14,6 +14,63 @@ const buildHeaders = () => {
   return headers;
 };
 
+const buildRealizedPnlSeries = (orders, fallbackTotalPnl = 0) => {
+  const filled = (orders ?? [])
+    .filter((o) => String(o.status ?? "").toLowerCase().includes("filled"))
+    .filter((o) => Number(o.filledQty ?? o.qty ?? 0) > 0)
+    .sort((a, b) => {
+      const at = new Date(a.filledAt || a.submittedAt || 0).getTime();
+      const bt = new Date(b.filledAt || b.submittedAt || 0).getTime();
+      return at - bt;
+    });
+
+  const lotsBySymbol = new Map();
+  let realized = 0;
+  const points = [{ x: 0, y: 0, label: "Start" }];
+  let step = 1;
+
+  for (const o of filled) {
+    const symbol = String(o.symbol ?? "");
+    const side = String(o.side ?? "").toLowerCase();
+    const qty = Number(o.filledQty ?? o.qty ?? 0);
+    const price = Number(o.filledAvgPrice ?? 0);
+    if (!symbol || qty <= 0 || price <= 0) continue;
+
+    if (side.includes("buy")) {
+      const lots = lotsBySymbol.get(symbol) ?? [];
+      lots.push({ qty, price });
+      lotsBySymbol.set(symbol, lots);
+      continue;
+    }
+
+    if (side.includes("sell")) {
+      let remaining = qty;
+      const lots = lotsBySymbol.get(symbol) ?? [];
+      while (remaining > 1e-9 && lots.length > 0) {
+        const lot = lots[0];
+        const matched = Math.min(remaining, lot.qty);
+        realized += (price - lot.price) * matched;
+        lot.qty -= matched;
+        remaining -= matched;
+        if (lot.qty <= 1e-9) lots.shift();
+      }
+      lotsBySymbol.set(symbol, lots);
+      points.push({
+        x: step,
+        y: Number(realized.toFixed(2)),
+        label: o.filledAt ? new Date(o.filledAt).toLocaleDateString() : `Trade ${step}`,
+      });
+      step += 1;
+    }
+  }
+
+  if (points.length === 1) {
+    points.push({ x: 1, y: Number(fallbackTotalPnl || 0), label: "Now" });
+  }
+
+  return points;
+};
+
 function App() {
   const [data, setData] = useState(null);
   const [trades, setTrades] = useState(null);
@@ -50,6 +107,38 @@ function App() {
 
   const topFive = useMemo(() => data?.candidates?.slice(0, 5) ?? [], [data]);
   const orderHistory = useMemo(() => trades?.allOrders ?? [], [trades]);
+  const pnlSeries = useMemo(
+    () => buildRealizedPnlSeries(orderHistory, trades?.summary?.totalPnl ?? 0),
+    [orderHistory, trades?.summary?.totalPnl],
+  );
+
+  const chart = useMemo(() => {
+    const width = 520;
+    const height = 180;
+    const pad = 18;
+    const ys = pnlSeries.map((p) => p.y);
+    const minY = Math.min(...ys, 0);
+    const maxY = Math.max(...ys, 0);
+    const yRange = Math.max(maxY - minY, 1);
+    const xMax = Math.max(pnlSeries.length - 1, 1);
+
+    const toX = (i) => pad + (i / xMax) * (width - pad * 2);
+    const toY = (y) => height - pad - ((y - minY) / yRange) * (height - pad * 2);
+    const path = pnlSeries
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(i).toFixed(2)} ${toY(p.y).toFixed(2)}`)
+      .join(" ");
+    const last = pnlSeries[pnlSeries.length - 1];
+    return {
+      width,
+      height,
+      path,
+      zeroY: toY(0),
+      lastX: toX(pnlSeries.length - 1),
+      lastY: toY(last.y),
+      lastLabel: last.label,
+      lastValue: last.y,
+    };
+  }, [pnlSeries]);
 
   return (
     <div className="page">
@@ -116,6 +205,45 @@ function App() {
                 <h2 className={(trades?.summary?.totalPnl ?? 0) >= 0 ? "up" : "down"}>
                   ${Number(trades?.summary?.totalPnl ?? 0).toFixed(2)}
                 </h2>
+              </article>
+            </section>
+
+            <section className="grid split">
+              <article className="card">
+                <div className="table-head">
+                  <h3>P&L Trend (Realized)</h3>
+                  <p>
+                    Latest:{" "}
+                    <span className={chart.lastValue >= 0 ? "up" : "down"}>
+                      {money(chart.lastValue)}
+                    </span>
+                  </p>
+                </div>
+                <div className="chart-wrap">
+                  <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="pnl-chart" role="img">
+                    <line
+                      x1="0"
+                      x2={chart.width}
+                      y1={chart.zeroY}
+                      y2={chart.zeroY}
+                      className="chart-zero"
+                    />
+                    <path d={chart.path} className="chart-line" />
+                    <circle cx={chart.lastX} cy={chart.lastY} r="4" className="chart-dot" />
+                  </svg>
+                </div>
+                <p className="chart-caption">Last update point: {chart.lastLabel}</p>
+              </article>
+
+              <article className="card">
+                <h3>Trading Plan</h3>
+                <ul className="plan-list">
+                  <li>Run the model once in the morning and cache the ranked results.</li>
+                  <li>Buy 100 shares of the top bounce-probability ticker.</li>
+                  <li>Use bracket risk controls: 5% take-profit and 2% stop-loss.</li>
+                  <li>Do not duplicate buys for the same symbol on the same day.</li>
+                  <li>Review P/L, open positions, and order history daily.</li>
+                </ul>
               </article>
             </section>
 
