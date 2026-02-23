@@ -1,0 +1,8 @@
+pandas
+yfinance
+ta
+scikit-learn
+alpaca-py
+python-dotenv
+fastapi
+uvicorn

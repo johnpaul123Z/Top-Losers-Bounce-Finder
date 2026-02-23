@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: ai-bounce-finder
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt && cd ui && npm ci && npm run build
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+      - key: DASHBOARD_TOKEN
+        sync: false
+      - key: DASHBOARD_USERNAME
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
+
+  - type: cron
+    name: ai-bounce-finder-daily-trade
+    env: python
+    schedule: "30 13 * * 1-5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python trade_top_pick.py --shares 100 --require-market-open
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
