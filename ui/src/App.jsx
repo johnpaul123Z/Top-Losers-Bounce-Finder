@@ -58,7 +58,7 @@ function App() {
 
       <main className="container">
         <header className="hero card">
-          <p className="eyebrow">AI Quant Dashboard</p>
+          <p className="eyebrow">Trading Dashboard</p>
           <h1>Top Losers Bounce Finder</h1>
           <p className="sub">
             A machine-learning project that scans top daily losers and ranks
