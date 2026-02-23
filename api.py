@@ -4,6 +4,7 @@ from base64 import b64decode
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+import json
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from alpaca_reporting import export_trades_json
-from main import build_rankings
+from main import build_rankings, export_json
 from trade_top_pick import get_trading_client
 
 app = FastAPI(title="AI Bounce Finder API", version="1.0.0")
@@ -72,6 +73,22 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+DATA_DIR = Path("data")
+RESULTS_CACHE_PATH = DATA_DIR / "results.cache.json"
+
+
+def empty_results_payload() -> dict:
+    return {
+        "generatedAt": now_iso(),
+        "project": {
+            "name": "AI Bounce Finder",
+            "description": "Ranks top daily losers by short-term bounce probability after large down days.",
+        },
+        "stats": {"totalCandidates": 0, "avgBounceProb": 0.0, "highConfidenceCount": 0},
+        "candidates": [],
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "ts": now_iso()}
@@ -79,32 +96,27 @@ def health() -> dict:
 
 @app.get("/api/results")
 def get_results(_: None = Depends(require_dashboard_token)) -> dict:
+    # Serve cached results so page views do not trigger model reruns.
+    if RESULTS_CACHE_PATH.exists():
+        return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
+    return empty_results_payload()
+
+
+@app.post("/api/refresh-results")
+def refresh_results(_: None = Depends(require_dashboard_token)) -> dict:
+    """
+    Rebuild probability rankings and overwrite cache.
+    Intended for cron/manual refresh, not for every page view.
+    """
     ranked = build_rankings(top_n=50)
     if ranked.empty:
-        return {
-            "generatedAt": now_iso(),
-            "project": {
-                "name": "AI Bounce Finder",
-                "description": "Ranks top daily losers by short-term bounce probability after large down days.",
-            },
-            "stats": {"totalCandidates": 0, "avgBounceProb": 0.0, "highConfidenceCount": 0},
-            "candidates": [],
-        }
+        payload = empty_results_payload()
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        RESULTS_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return payload
 
-    payload = {
-        "generatedAt": now_iso(),
-        "project": {
-            "name": "AI Bounce Finder",
-            "description": "Ranks top daily losers by short-term bounce probability after large down days.",
-        },
-        "stats": {
-            "totalCandidates": int(len(ranked)),
-            "avgBounceProb": round(float(ranked["BounceProb"].mean()), 2),
-            "highConfidenceCount": int((ranked["BounceProb"] >= 60).sum()),
-        },
-        "candidates": ranked.to_dict(orient="records"),
-    }
-    return payload
+    export_json(ranked, str(RESULTS_CACHE_PATH))
+    return json.loads(RESULTS_CACHE_PATH.read_text(encoding="utf-8"))
 
 
 @app.get("/api/trades")
