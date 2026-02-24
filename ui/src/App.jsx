@@ -110,6 +110,12 @@ function App() {
     () => buildRealizedPnlSeries(trades?.allOrders ?? [], trades?.summary?.totalPnl ?? 0),
     [trades?.allOrders, trades?.summary?.totalPnl],
   );
+  const winRate = useMemo(() => {
+    const wins = Number(trades?.summary?.wins ?? 0);
+    const losses = Number(trades?.summary?.losses ?? 0);
+    const total = wins + losses;
+    return total > 0 ? (wins / total) * 100 : 0;
+  }, [trades?.summary?.wins, trades?.summary?.losses]);
 
   const chart = useMemo(() => {
     const width = 520;
@@ -204,6 +210,10 @@ function App() {
                 <h2 className={(trades?.summary?.totalPnl ?? 0) >= 0 ? "up" : "down"}>
                   ${Number(trades?.summary?.totalPnl ?? 0).toFixed(2)}
                 </h2>
+              </article>
+              <article className="card stat">
+                <p>Win Rate</p>
+                <h2 className={winRate >= 50 ? "up" : "down"}>{pct(winRate, 1)}</h2>
               </article>
             </section>
 
@@ -368,42 +378,6 @@ function App() {
                           <td className={p.unrealizedPnl >= 0 ? "up" : "down"}>
                             {money(p.unrealizedPnl)} ({pct(p.unrealizedPnlPct, 2)})
                           </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </article>
-
-              <article className="card">
-                <div className="table-head">
-                  <h3>Recent Filled Trades</h3>
-                  <p>{trades?.summary?.filledOrders ?? 0} fills</p>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Symbol</th>
-                        <th>Side</th>
-                        <th>Qty</th>
-                        <th>Price</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(trades?.recentFills ?? []).length === 0 && (
-                        <tr>
-                          <td colSpan={5}>No filled orders yet.</td>
-                        </tr>
-                      )}
-                      {(trades?.recentFills ?? []).map((fill, idx) => (
-                        <tr key={`${fill.symbol}-${fill.filledAt ?? idx}`}>
-                          <td>{fill.filledAt ? new Date(fill.filledAt).toLocaleString() : "-"}</td>
-                          <td>{fill.symbol}</td>
-                          <td className={fill.side === "buy" ? "up" : "down"}>{fill.side}</td>
-                          <td>{Number(fill.qty).toFixed(0)}</td>
-                          <td>${Number(fill.price).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>

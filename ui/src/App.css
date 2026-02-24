@@ -88,6 +88,10 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.pnl-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .split {
   grid-template-columns: 1.2fr 1fr;
 }
