@@ -73,9 +73,9 @@ def get_reference_price(symbol: str) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Buy 100 shares of top bounce-ranked stock on Alpaca paper trading."
+        description="Buy 1000 shares of top bounce-ranked stock on Alpaca paper trading."
     )
-    parser.add_argument("--shares", type=int, default=100, help="Shares to buy.")
+    parser.add_argument("--shares", type=int, default=1000, help="Shares to buy.")
     parser.add_argument(
         "--min-prob",
         type=float,

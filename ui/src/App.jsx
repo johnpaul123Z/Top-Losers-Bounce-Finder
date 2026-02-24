@@ -106,10 +106,9 @@ function App() {
   }, []);
 
   const topFive = useMemo(() => data?.candidates?.slice(0, 5) ?? [], [data]);
-  const orderHistory = useMemo(() => trades?.allOrders ?? [], [trades]);
   const pnlSeries = useMemo(
-    () => buildRealizedPnlSeries(orderHistory, trades?.summary?.totalPnl ?? 0),
-    [orderHistory, trades?.summary?.totalPnl],
+    () => buildRealizedPnlSeries(trades?.allOrders ?? [], trades?.summary?.totalPnl ?? 0),
+    [trades?.allOrders, trades?.summary?.totalPnl],
   );
 
   const chart = useMemo(() => {
@@ -240,8 +239,8 @@ function App() {
                 <ul className="plan-list">
                   <li>Fully automated pipeline runs each morning with no manual stock selection.</li>
                   <li>The model refreshes and caches the ranked bounce candidates automatically.</li>
-                  <li>The system auto-buys 100 shares of the highest bounce-probability ticker.</li>
-                  <li>Bracket exits are auto-attached: 5% take-profit and 2% stop-loss.</li>
+                  <li>The system auto-buys 1000 shares of the highest bounce-probability ticker.</li>
+                  <li>Bracket exits are auto-attached: 7% take-profit and 3.5% stop-loss.</li>
                   <li>Duplicate same-day buys for the same symbol are automatically blocked.</li>
                   <li>P/L, open positions, and order history update automatically in the dashboard.</li>
                 </ul>
@@ -413,51 +412,6 @@ function App() {
               </article>
             </section>
 
-            <section className="card">
-              <div className="table-head">
-                <h3>All Order History</h3>
-                <p>{orderHistory.length} orders</p>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Submitted</th>
-                      <th>Symbol</th>
-                      <th>Side</th>
-                      <th>Status</th>
-                      <th>Type</th>
-                      <th>Qty</th>
-                      <th>Filled</th>
-                      <th>Avg Fill</th>
-                      <th>TIF</th>
-                      <th>Order ID</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orderHistory.length === 0 && (
-                      <tr>
-                        <td colSpan={10}>No orders yet.</td>
-                      </tr>
-                    )}
-                    {orderHistory.map((o) => (
-                      <tr key={o.id}>
-                        <td>{o.submittedAt ? new Date(o.submittedAt).toLocaleString() : "-"}</td>
-                        <td>{o.symbol || "-"}</td>
-                        <td className={o.side === "buy" ? "up" : "down"}>{o.side || "-"}</td>
-                        <td>{o.status || "-"}</td>
-                        <td>{o.type || "-"}</td>
-                        <td>{Number(o.qty ?? 0).toFixed(0)}</td>
-                        <td>{Number(o.filledQty ?? 0).toFixed(0)}</td>
-                        <td>{o.filledAvgPrice ? money(o.filledAvgPrice) : "-"}</td>
-                        <td>{o.timeInForce || "-"}</td>
-                        <td className="mono">{o.id}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
           </>
         )}
       </main>

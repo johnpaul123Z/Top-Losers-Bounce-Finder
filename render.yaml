@@ -26,7 +26,7 @@ services:
     env: python
     schedule: "40 14 * * 1-5"
     buildCommand: pip install -r requirements.txt
-    startCommand: python trade_top_pick.py --shares 75 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
+    startCommand: python trade_top_pick.py --shares 1000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
     envVars:
       - key: ALPACA_API_KEY
         sync: false
