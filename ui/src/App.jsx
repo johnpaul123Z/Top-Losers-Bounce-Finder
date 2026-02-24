@@ -114,7 +114,7 @@ function App() {
     const wins = Number(trades?.summary?.wins ?? 0);
     const losses = Number(trades?.summary?.losses ?? 0);
     const total = wins + losses;
-    return total > 0 ? (wins / total) * 100 : 0;
+    return total > 0 ? (wins / total) * 100 : null;
   }, [trades?.summary?.wins, trades?.summary?.losses]);
 
   const chart = useMemo(() => {
@@ -213,7 +213,9 @@ function App() {
               </article>
               <article className="card stat">
                 <p>Win Rate</p>
-                <h2 className={winRate >= 50 ? "up" : "down"}>{pct(winRate, 1)}</h2>
+                <h2 className={winRate === null ? "" : winRate >= 50 ? "up" : "down"}>
+                  {winRate === null ? "N/A" : pct(winRate, 1)}
+                </h2>
               </article>
             </section>
 

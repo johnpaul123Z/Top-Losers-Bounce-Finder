@@ -14,6 +14,16 @@ def _to_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _norm_enum(value) -> str:
+    """
+    Normalize Alpaca enum-like values (e.g., 'OrderStatus.FILLED' -> 'filled').
+    """
+    text = str(value or "").strip().lower()
+    if "." in text:
+        text = text.split(".")[-1]
+    return text
+
+
 def _compute_realized_pnl(filled_orders):
     """
     FIFO realized P/L estimate from filled buy/sell orders.
@@ -26,7 +36,7 @@ def _compute_realized_pnl(filled_orders):
 
     for order in filled_orders:
         symbol = str(getattr(order, "symbol", ""))
-        side = str(getattr(order, "side", "")).lower()
+        side = _norm_enum(getattr(order, "side", ""))
         qty = _to_float(getattr(order, "filled_qty", 0))
         price = _to_float(getattr(order, "filled_avg_price", 0))
         if not symbol or qty <= 0 or price <= 0:
@@ -73,11 +83,11 @@ def export_trades_json(client: TradingClient, output_path: str = "ui/public/trad
         key=lambda o: getattr(o, "submitted_at", datetime.min.replace(tzinfo=timezone.utc)),
         reverse=True,
     )
-    filled = [o for o in orders if str(getattr(o, "status", "")).lower() == "filled"]
+    filled = [o for o in orders if _norm_enum(getattr(o, "status", "")) == "filled"]
     filled_sorted = sorted(filled, key=lambda o: getattr(o, "filled_at", datetime.min.replace(tzinfo=timezone.utc)))
 
-    buy_count = sum(1 for o in filled_sorted if "buy" in str(getattr(o, "side", "")).lower())
-    sell_count = sum(1 for o in filled_sorted if "sell" in str(getattr(o, "side", "")).lower())
+    buy_count = sum(1 for o in filled_sorted if _norm_enum(getattr(o, "side", "")) == "buy")
+    sell_count = sum(1 for o in filled_sorted if _norm_enum(getattr(o, "side", "")) == "sell")
 
     positions = client.get_all_positions()
     open_positions = []
@@ -128,7 +138,7 @@ def export_trades_json(client: TradingClient, output_path: str = "ui/public/trad
             {
                 "id": str(getattr(o, "id", "")),
                 "symbol": str(getattr(o, "symbol", "")),
-                "side": str(getattr(o, "side", "")).lower(),
+                "side": _norm_enum(getattr(o, "side", "")),
                 "qty": _to_float(getattr(o, "filled_qty", 0)),
                 "price": _to_float(getattr(o, "filled_avg_price", 0)),
                 "filledAt": getattr(o, "filled_at", None).isoformat() if getattr(o, "filled_at", None) else None,
@@ -141,10 +151,10 @@ def export_trades_json(client: TradingClient, output_path: str = "ui/public/trad
             {
                 "id": str(getattr(o, "id", "")),
                 "symbol": str(getattr(o, "symbol", "")),
-                "side": str(getattr(o, "side", "")).lower(),
-                "status": str(getattr(o, "status", "")).lower(),
-                "type": str(getattr(o, "type", "")).lower(),
-                "timeInForce": str(getattr(o, "time_in_force", "")).lower(),
+                "side": _norm_enum(getattr(o, "side", "")),
+                "status": _norm_enum(getattr(o, "status", "")),
+                "type": _norm_enum(getattr(o, "type", "")),
+                "timeInForce": _norm_enum(getattr(o, "time_in_force", "")),
                 "qty": _to_float(getattr(o, "qty", 0)),
                 "filledQty": _to_float(getattr(o, "filled_qty", 0)),
                 "limitPrice": _to_float(getattr(o, "limit_price", 0)),
