@@ -124,17 +124,6 @@ def main() -> None:
         return
 
     export_json(ranked, args.json_out)
-    top = ranked.iloc[0]
-    symbol = str(top["Ticker"])
-    bounce_prob = float(top["BounceProb"])
-
-    print(f"Top pick: {symbol} | BounceProb={bounce_prob:.1f}% | Return={top['Return']:.2f}%")
-    if bounce_prob < args.min_prob:
-        print(
-            f"Top pick probability {bounce_prob:.1f}% is below threshold {args.min_prob:.1f}%. No trade."
-        )
-        return
-
     client = get_trading_client()
     account = client.get_account()
     print(f"Account status={account.status} buying_power={account.buying_power}")
@@ -150,8 +139,27 @@ def main() -> None:
         f"unrealized=${trades_payload['summary']['unrealizedPnl']:.2f}"
     )
 
-    if already_bought_today(client, symbol):
-        print(f"Already bought {symbol} today. Skipping duplicate order.")
+    # Pick the highest-ranked symbol that has not already been bought today.
+    selected_row = None
+    for _, row in ranked.iterrows():
+        candidate_symbol = str(row["Ticker"])
+        if already_bought_today(client, candidate_symbol):
+            print(f"Already bought {candidate_symbol} today. Checking next-ranked candidate...")
+            continue
+        selected_row = row
+        break
+
+    if selected_row is None:
+        print("All ranked candidates were already bought today. No trade placed.")
+        return
+
+    symbol = str(selected_row["Ticker"])
+    bounce_prob = float(selected_row["BounceProb"])
+    print(f"Top eligible pick: {symbol} | BounceProb={bounce_prob:.1f}% | Return={selected_row['Return']:.2f}%")
+    if bounce_prob < args.min_prob:
+        print(
+            f"Top eligible probability {bounce_prob:.1f}% is below threshold {args.min_prob:.1f}%. No trade."
+        )
         return
 
     tp_pct = float(args.take_profit_pct)
