@@ -38,7 +38,14 @@ def fetch_top_losers(top_n: int = TOP_N, min_drop: float = DROP_THRESHOLD) -> pd
         pct = q.get("regularMarketChangePercent")
         if not symbol or pct is None:
             continue
-        rows.append({"Symbol": symbol, "PctChange": float(pct) / 100.0})
+        market_price = q.get("regularMarketPrice")
+        rows.append(
+            {
+                "Symbol": symbol,
+                "PctChange": float(pct) / 100.0,
+                "MarketPrice": float(market_price) if market_price is not None else None,
+            }
+        )
 
     losers = pd.DataFrame(rows)
     if losers.empty:
@@ -82,7 +89,9 @@ def build_features_for_ticker(ticker: str) -> pd.DataFrame:
     df["RSI"] = RSIIndicator(close, window=14).rsi()
     atr = AverageTrueRange(high, low, close, window=14)
     df["ATR_PCT"] = atr.average_true_range() / close
-    df["VolumeRatio"] = volume / volume.rolling(20).mean()
+    df["AvgVolume"] = volume.rolling(20).mean()
+    df["VolumeRatio"] = volume / df["AvgVolume"]
+    df["Price"] = close
     df["MA20"] = close.rolling(20).mean()
     df["Dist_MA20"] = (close - df["MA20"]) / df["MA20"]
 
@@ -94,7 +103,19 @@ def build_features_for_ticker(ticker: str) -> pd.DataFrame:
     df["Bounce"] = (df["FutureReturn"] >= BOUNCE_TARGET).astype(int)
     df["BigDrop"] = df["Return"] <= DROP_THRESHOLD
     df["Ticker"] = ticker
-    keep_cols = ["Return", "RSI", "ATR_PCT", "VolumeRatio", "Dist_MA20", "LowerWick", "Bounce", "BigDrop", "Ticker"]
+    keep_cols = [
+        "Return",
+        "RSI",
+        "ATR_PCT",
+        "VolumeRatio",
+        "Dist_MA20",
+        "LowerWick",
+        "Bounce",
+        "BigDrop",
+        "Ticker",
+        "Price",
+        "AvgVolume",
+    ]
     return df[keep_cols].dropna()
 
 
@@ -157,8 +178,12 @@ def build_rankings(top_n: int = TOP_N) -> pd.DataFrame:
         return pd.DataFrame()
 
     merged = ranked.merge(losers, left_on="Ticker", right_on="Symbol", how="left")
-    cols = ["Ticker", "PctChange", "Return", "VolumeRatio", "RSI", "BounceProb"]
+    if "MarketPrice" in merged.columns:
+        merged["Price"] = merged["MarketPrice"].fillna(merged["Price"])
+    cols = ["Ticker", "PctChange", "Return", "VolumeRatio", "RSI", "BounceProb", "Price", "AvgVolume"]
     out = merged[cols].copy()
+    out["Price"] = out["Price"].round(2)
+    out["AvgVolume"] = out["AvgVolume"].round(0)
     out["PctChange"] = (out["PctChange"] * 100).round(2)
     out["Return"] = (out["Return"] * 100).round(2)
     out["BounceProb"] = (out["BounceProb"] * 100).round(1)

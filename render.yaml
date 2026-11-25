@@ -27,7 +27,7 @@ services:
     env: python
     schedule: "31 14 * * 1-5"
     buildCommand: pip install -r requirements.txt
-    startCommand: python trade_top_pick.py --notional 5000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
+    startCommand: python trade_top_pick.py --notional 5000 --min-prob 60 --take-profit-pct 3 --stop-loss-pct 2 --require-market-open
     envVars:
       - key: ALPACA_API_KEY
         sync: false
@@ -43,7 +43,7 @@ services:
     env: python
     schedule: "31 13 * * 1-5"
     buildCommand: pip install -r requirements.txt
-    startCommand: python trade_top_pick.py --notional 5000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
+    startCommand: python trade_top_pick.py --notional 5000 --min-prob 60 --take-profit-pct 3 --stop-loss-pct 2 --require-market-open
     envVars:
       - key: ALPACA_API_KEY
         sync: false

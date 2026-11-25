@@ -1,18 +1,31 @@
 import argparse
+import json
 import os
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
-from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, StopLossRequest, TakeProfitRequest
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+    StopLossRequest,
+    TakeProfitRequest,
+)
 from dotenv import load_dotenv
 
 from alpaca_reporting import export_trades_json
-from main import build_rankings, export_json
+from main import HOLD_DAYS, build_rankings, export_json
 
 ET = ZoneInfo("America/New_York")
+MIN_PRICE = 5.0
+MIN_AVG_VOLUME = 500_000
+TRADE_LOG_PATH = Path("data/trade_log.json")
+FILL_WAIT_SECONDS = 90
 OPEN_BUY_STATUSES = {
     "new",
     "accepted",
@@ -75,6 +88,198 @@ def already_bought_today(client: TradingClient) -> bool:
     return False
 
 
+def market_days_since(start, end) -> int:
+    """Weekdays after start, up to and including end."""
+    if end <= start:
+        return 0
+    days = 0
+    cursor = start
+    while cursor < end:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            days += 1
+    return days
+
+
+def load_trade_log(path: Path = TRADE_LOG_PATH) -> list:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    trades = payload.get("trades", [])
+    return trades if isinstance(trades, list) else []
+
+
+def save_trade_log(trades: list, path: Path = TRADE_LOG_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"trades": trades}, indent=2), encoding="utf-8")
+
+
+def _position_qty(client: TradingClient, symbol: str) -> float:
+    for position in client.get_all_positions():
+        if str(getattr(position, "symbol", "")) == symbol:
+            return float(getattr(position, "qty", 0) or 0)
+    return 0.0
+
+
+def cancel_open_orders(client: TradingClient, symbol: str) -> None:
+    req = GetOrdersRequest(status="open", symbols=[symbol], limit=50)
+    for order in client.get_orders(filter=req):
+        client.cancel_order_by_id(order.id)
+
+
+def wait_for_order(client: TradingClient, order_id: str, timeout: int = FILL_WAIT_SECONDS):
+    deadline = time.time() + timeout
+    order = client.get_order_by_id(order_id)
+    while time.time() < deadline:
+        status = _norm_enum(getattr(order, "status", ""))
+        if status in {"filled", "canceled", "expired", "rejected", "suspended"}:
+            return order
+        time.sleep(2)
+        order = client.get_order_by_id(order_id)
+    return order
+
+
+def record_exit(trades: list, symbol: str, exit_price: float, closed_at: str) -> None:
+    for trade in reversed(trades):
+        if trade.get("symbol") != symbol or trade.get("status") == "closed":
+            continue
+        entry = float(trade.get("fillPrice") or 0)
+        shares = float(trade.get("shares") or 0)
+        trade["exitPrice"] = round(exit_price, 4)
+        trade["closedAt"] = closed_at
+        trade["status"] = "closed"
+        if entry > 0 and shares > 0:
+            trade["realizedPnl"] = round((exit_price - entry) * shares, 2)
+        return
+
+
+def refresh_trade_log(client: TradingClient, path: Path = TRADE_LOG_PATH) -> list:
+    """Fill in exit price and realized P/L once a logged trade is flat."""
+    trades = load_trade_log(path)
+    if not trades:
+        return trades
+    open_symbols = {
+        str(getattr(position, "symbol", ""))
+        for position in client.get_all_positions()
+        if float(getattr(position, "qty", 0) or 0) > 0
+    }
+    req = GetOrdersRequest(status="closed", limit=200)
+    closed_orders = client.get_orders(filter=req)
+    changed = False
+    for trade in trades:
+        if trade.get("status") == "closed":
+            continue
+        symbol = str(trade.get("symbol") or "")
+        if symbol in open_symbols:
+            continue
+        entry_at = trade.get("entryTime")
+        exit_order = None
+        for order in closed_orders:
+            if str(getattr(order, "symbol", "")) != symbol:
+                continue
+            if _norm_enum(getattr(order, "side", "")) != "sell":
+                continue
+            if _norm_enum(getattr(order, "status", "")) != "filled":
+                continue
+            filled_at = getattr(order, "filled_at", None)
+            if entry_at and filled_at and filled_at.isoformat() < entry_at:
+                continue
+            exit_order = order
+            break
+        if exit_order is None:
+            continue
+        filled_at = getattr(exit_order, "filled_at", None)
+        record_exit(
+            trades,
+            symbol,
+            float(getattr(exit_order, "filled_avg_price", 0) or 0),
+            filled_at.isoformat() if filled_at else datetime.now(timezone.utc).isoformat(),
+        )
+        changed = True
+    if changed:
+        save_trade_log(trades, path)
+    return trades
+
+
+def close_expired_positions(client: TradingClient, dry_run: bool, path: Path = TRADE_LOG_PATH) -> None:
+    """Market-sell a logged position that is still open after the 3-day hold."""
+    trades = load_trade_log(path)
+    today = datetime.now(ET).date()
+    changed = False
+    for trade in trades:
+        if trade.get("status") == "closed":
+            continue
+        symbol = str(trade.get("symbol") or "")
+        entry_raw = trade.get("entryTime")
+        if not symbol or not entry_raw:
+            continue
+        entry_day = datetime.fromisoformat(entry_raw).astimezone(ET).date()
+        if market_days_since(entry_day, today) < HOLD_DAYS:
+            continue
+        qty = _position_qty(client, symbol)
+        if qty <= 0:
+            continue
+        print(f"{symbol} is still open after {HOLD_DAYS} market days. Closing it.")
+        if dry_run:
+            print(f"[DRY RUN] Would market-sell {qty} {symbol}.")
+            continue
+        cancel_open_orders(client, symbol)
+        order = client.submit_order(
+            MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+        )
+        filled = wait_for_order(client, str(order.id))
+        status = _norm_enum(getattr(filled, "status", ""))
+        print(f"Close order {filled.id} for {symbol} status={status}")
+        if status == "filled":
+            filled_at = getattr(filled, "filled_at", None)
+            record_exit(
+                trades,
+                symbol,
+                float(getattr(filled, "filled_avg_price", 0) or 0),
+                filled_at.isoformat() if filled_at else datetime.now(timezone.utc).isoformat(),
+            )
+            changed = True
+    if changed:
+        save_trade_log(trades, path)
+
+
+def append_trade(entry: dict, path: Path = TRADE_LOG_PATH) -> None:
+    trades = load_trade_log(path)
+    trades.append(entry)
+    save_trade_log(trades, path)
+
+
+def place_exit_orders(client: TradingClient, symbol: str, qty: float, fill_price: float, tp_pct: float, sl_pct: float):
+    take_profit_price = round(fill_price * (1 + (tp_pct / 100.0)), 2)
+    stop_loss_price = round(fill_price * (1 - (sl_pct / 100.0)), 2)
+    if stop_loss_price <= 0 or take_profit_price <= stop_loss_price:
+        raise RuntimeError("Invalid exit prices from the fill. Check take-profit and stop-loss percents.")
+    print(
+        f"Exits from fill ${fill_price:.2f} | TP=${take_profit_price:.2f} (+{tp_pct:.2f}%) "
+        f"SL=${stop_loss_price:.2f} (-{sl_pct:.2f}%) held up to {HOLD_DAYS} market days"
+    )
+    return client.submit_order(
+        LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC,
+            limit_price=take_profit_price,
+            order_class=OrderClass.OCO,
+            take_profit=TakeProfitRequest(limit_price=take_profit_price),
+            stop_loss=StopLossRequest(stop_price=stop_loss_price),
+        )
+    )
+
+
 def shares_for_notional(price: float, notional: float) -> int:
     """
     Whole shares closest to the dollar budget. Bracket orders need a share count.
@@ -126,8 +331,8 @@ def main() -> None:
     parser.add_argument(
         "--min-prob",
         type=float,
-        default=0.0,
-        help="Minimum bounce probability required (0-100).",
+        default=60.0,
+        help="Minimum bounce probability required (0-100). Default: 60.",
     )
     parser.add_argument(
         "--json-out",
@@ -154,14 +359,14 @@ def main() -> None:
     parser.add_argument(
         "--take-profit-pct",
         type=float,
-        default=6.0,
-        help="Take profit percent above entry reference (default: 6.0). Set <=0 to disable bracket exits.",
+        default=3.0,
+        help="Take profit percent above the fill price (default: 3). Set <=0 to skip exits.",
     )
     parser.add_argument(
         "--stop-loss-pct",
         type=float,
-        default=3.0,
-        help="Stop loss percent below entry reference (default: 3.0). Set <=0 to disable bracket exits.",
+        default=2.0,
+        help="Stop loss percent below the fill price (default: 2). Set <=0 to skip exits.",
     )
     args = parser.parse_args()
 
@@ -172,6 +377,9 @@ def main() -> None:
     if args.require_market_open and not is_market_open(client):
         print("Market is closed. Skipping order due to --require-market-open.")
         return
+
+    refresh_trade_log(client)
+    close_expired_positions(client, dry_run=args.dry_run)
 
     if already_bought_today(client):
         print("Already placed the opening buy today. No trade placed.")
@@ -191,29 +399,44 @@ def main() -> None:
         f"unrealized=${trades_payload['summary']['unrealizedPnl']:.2f}"
     )
 
-    selected_row = ranked.iloc[0]
+    selected_row = None
+    for _, row in ranked.iterrows():
+        symbol = str(row["Ticker"])
+        bounce_prob = float(row["BounceProb"])
+        price = float(row["Price"]) if row.get("Price") == row.get("Price") else 0.0
+        avg_volume = float(row["AvgVolume"]) if row.get("AvgVolume") == row.get("AvgVolume") else 0.0
+        if bounce_prob < args.min_prob:
+            break
+        if price < MIN_PRICE:
+            print(f"Skip {symbol}: price ${price:.2f} is below ${MIN_PRICE:.0f}.")
+            continue
+        if avg_volume < MIN_AVG_VOLUME:
+            print(f"Skip {symbol}: average volume {avg_volume:,.0f} is below {MIN_AVG_VOLUME:,.0f}.")
+            continue
+        selected_row = row
+        break
+
+    if selected_row is None:
+        print("No tradable candidate cleared the filters. No trade placed.")
+        return
+
     symbol = str(selected_row["Ticker"])
     bounce_prob = float(selected_row["BounceProb"])
-    print(f"Top eligible pick: {symbol} | BounceProb={bounce_prob:.1f}% | Return={selected_row['Return']:.2f}%")
-    if bounce_prob < args.min_prob:
-        print(
-            f"Top eligible probability {bounce_prob:.1f}% is below threshold {args.min_prob:.1f}%. No trade."
-        )
-        return
+    ref_price = float(selected_row["Price"])
+    print(
+        f"Top eligible pick: {symbol} | BounceProb={bounce_prob:.1f}% | "
+        f"Price=${ref_price:.2f} | AvgVolume={float(selected_row['AvgVolume']):,.0f}"
+    )
 
     tp_pct = float(args.take_profit_pct)
     sl_pct = float(args.stop_loss_pct)
-    use_bracket = tp_pct > 0 and sl_pct > 0
+    use_exits = tp_pct > 0 and sl_pct > 0
     notional = float(args.notional)
-
-    ref_price = None
-    if notional > 0 or use_bracket:
-        ref_price = get_reference_price(symbol)
 
     if notional > 0:
         qty = shares_for_notional(ref_price, notional)
         print(
-            f"Order size: {qty} shares of {symbol} at ref ${ref_price:.2f} "
+            f"Order size: {qty} shares of {symbol} at ${ref_price:.2f} "
             f"(~${qty * ref_price:.2f}, target ${notional:.0f})"
         )
     else:
@@ -221,55 +444,56 @@ def main() -> None:
         if qty < 1:
             raise RuntimeError("Set --notional above 0 or --shares to at least 1.")
 
-    if use_bracket:
-        take_profit_price = round(ref_price * (1 + (tp_pct / 100.0)), 2)
-        stop_loss_price = round(ref_price * (1 - (sl_pct / 100.0)), 2)
-        if stop_loss_price <= 0 or take_profit_price <= stop_loss_price:
-            raise RuntimeError(
-                "Invalid bracket prices. Check --take-profit-pct and --stop-loss-pct settings."
-            )
+    if args.dry_run:
         print(
-            f"Using bracket exits | ref={ref_price:.2f} TP={take_profit_price:.2f} (+{tp_pct:.2f}%) "
-            f"SL={stop_loss_price:.2f} (-{sl_pct:.2f}%)"
+            f"[DRY RUN] Would buy {qty} {symbol}"
+            + (f", then a {HOLD_DAYS}-day {tp_pct:.1f}% / {sl_pct:.1f}% exit from the fill" if use_exits else "")
         )
-        order_data = MarketOrderRequest(
+        return
+
+    order = client.submit_order(
+        MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
-            order_class=OrderClass.BRACKET,
-            take_profit=TakeProfitRequest(limit_price=take_profit_price),
-            stop_loss=StopLossRequest(stop_price=stop_loss_price),
         )
-    else:
-        print("TP/SL bracket disabled (take-profit or stop-loss percent <= 0).")
-        if notional > 0:
-            order_data = MarketOrderRequest(
-                symbol=symbol,
-                notional=round(notional, 2),
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
-            )
-        else:
-            order_data = MarketOrderRequest(
-                symbol=symbol,
-                qty=qty,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
-            )
-
-    if args.dry_run:
-        size = f"${notional:.0f}" if notional > 0 else f"{qty} shares"
-        print(
-            f"[DRY RUN] Would place order: BUY {size} of {symbol} ({qty} shares)"
-            + (" with BRACKET exits" if use_bracket else "")
-        )
+    )
+    print(f"Entry submitted: id={order.id} symbol={symbol} qty={qty} status={order.status}")
+    filled = wait_for_order(client, str(order.id))
+    status = _norm_enum(getattr(filled, "status", ""))
+    fill_price = float(getattr(filled, "filled_avg_price", 0) or 0)
+    filled_qty = float(getattr(filled, "filled_qty", 0) or 0)
+    print(f"Entry result: status={status} filled_qty={filled_qty} fill=${fill_price:.2f}")
+    if status != "filled" or fill_price <= 0 or filled_qty <= 0:
+        print("Entry did not fill. No exit orders placed.")
         return
 
-    order = client.submit_order(order_data)
-    print(
-        f"Order submitted: id={order.id} symbol={order.symbol} side={order.side} "
-        f"qty={order.qty} status={order.status}"
+    exit_order_id = None
+    if use_exits:
+        try:
+            exit_order = place_exit_orders(client, symbol, filled_qty, fill_price, tp_pct, sl_pct)
+            exit_order_id = str(exit_order.id)
+            print(f"Exit order submitted: id={exit_order.id} status={exit_order.status}")
+        except Exception as exc:
+            print(f"Entry filled, but the exit order failed: {exc}")
+
+    filled_at = getattr(filled, "filled_at", None)
+    append_trade(
+        {
+            "symbol": symbol,
+            "bounceProb": bounce_prob,
+            "fillPrice": round(fill_price, 4),
+            "shares": filled_qty,
+            "notional": round(fill_price * filled_qty, 2),
+            "entryTime": filled_at.isoformat() if filled_at else datetime.now(timezone.utc).isoformat(),
+            "entryOrderId": str(filled.id),
+            "exitOrderId": exit_order_id,
+            "exitPrice": None,
+            "realizedPnl": None,
+            "closedAt": None,
+            "status": "open",
+        }
     )
 
     # Refresh report to include newest order quickly once it fills.
