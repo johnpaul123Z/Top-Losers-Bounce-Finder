@@ -21,12 +21,29 @@ services:
       - key: ALLOWED_ORIGINS
         value: "*"
 
+  # 9:31 AM ET while the US is on standard time (8:31 AM CT). One minute after the bell.
   - type: cron
     name: ai-bounce-finder-daily-trade
     env: python
-    schedule: "30 14 * * 1-5"
+    schedule: "31 14 * * 1-5"
     buildCommand: pip install -r requirements.txt
-    startCommand: python trade_top_pick.py --shares 1000 --take-profit-pct 7 --stop-loss-pct 3.5
+    startCommand: python trade_top_pick.py --notional 2000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: ALPACA_BASE_URL
+        value: https://paper-api.alpaca.markets
+
+  # 9:31 AM ET while the US is on daylight time. The script buys only once per market day,
+  # so the run that fires before the open exits without an order.
+  - type: cron
+    name: ai-bounce-finder-daily-trade-dst
+    env: python
+    schedule: "31 13 * * 1-5"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python trade_top_pick.py --notional 2000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
     envVars:
       - key: ALPACA_API_KEY
         sync: false

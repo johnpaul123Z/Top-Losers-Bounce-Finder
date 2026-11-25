@@ -1,6 +1,7 @@
 import argparse
 import os
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from alpaca.trading.client import TradingClient
@@ -10,6 +11,17 @@ from dotenv import load_dotenv
 
 from alpaca_reporting import export_trades_json
 from main import build_rankings, export_json
+
+ET = ZoneInfo("America/New_York")
+OPEN_BUY_STATUSES = {
+    "new",
+    "accepted",
+    "pending_new",
+    "accepted_for_bidding",
+    "partially_filled",
+    "filled",
+    "held",
+}
 
 
 def get_trading_client() -> TradingClient:
@@ -32,25 +44,49 @@ def is_market_open(client: TradingClient) -> bool:
     return bool(getattr(clock, "is_open", False))
 
 
-def already_bought_today(client: TradingClient, symbol: str) -> bool:
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _norm_enum(value) -> str:
+    text = str(value or "").strip().lower()
+    if "." in text:
+        text = text.split(".")[-1]
+    return text
+
+
+def already_bought_today(client: TradingClient) -> bool:
     """
-    Prevent duplicate buys for same symbol on same UTC day.
+    One opening buy per US market day, regardless of symbol.
     """
     req = GetOrdersRequest(status="all", limit=500)
     orders = client.get_orders(filter=req)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(ET).date()
     for order in orders:
-        side = str(getattr(order, "side", "")).lower()
-        status = str(getattr(order, "status", "")).lower()
-        if (
-            getattr(order, "symbol", None) == symbol
-            and "buy" in side
-            and status in {"new", "accepted", "partially_filled", "filled"}
-        ):
-            submitted = getattr(order, "submitted_at", None)
-            if submitted and submitted.date() == today:
-                return True
+        side = _norm_enum(getattr(order, "side", ""))
+        status = _norm_enum(getattr(order, "status", ""))
+        if side != "buy" or status not in OPEN_BUY_STATUSES:
+            continue
+        submitted = getattr(order, "submitted_at", None)
+        if submitted and _as_utc(submitted).astimezone(ET).date() == today:
+            return True
     return False
+
+
+def shares_for_notional(price: float, notional: float) -> int:
+    """
+    Whole shares closest to the dollar budget. Bracket orders need a share count.
+    """
+    if price <= 0:
+        raise RuntimeError(f"Invalid reference price: {price}")
+    qty = int(round(notional / price))
+    if qty < 1:
+        raise RuntimeError(
+            f"Reference price ${price:.2f} is above the ${notional:.0f} order size."
+        )
+    return qty
 
 
 def get_reference_price(symbol: str) -> float:
@@ -73,9 +109,20 @@ def get_reference_price(symbol: str) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Buy 1000 shares of top bounce-ranked stock on Alpaca paper trading."
+        description="Buy about $2,000 of the top bounce-ranked loser once per market day."
     )
-    parser.add_argument("--shares", type=int, default=1000, help="Shares to buy.")
+    parser.add_argument(
+        "--notional",
+        type=float,
+        default=2000.0,
+        help="Dollar amount to buy (default: 2000). Set <=0 to use --shares instead.",
+    )
+    parser.add_argument(
+        "--shares",
+        type=int,
+        default=0,
+        help="Share count. Used only when --notional is <= 0.",
+    )
     parser.add_argument(
         "--min-prob",
         type=float,
@@ -118,12 +165,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    ranked = build_rankings(top_n=50)
-    if ranked.empty:
-        print("No ranked candidates available. No trade placed.")
-        return
-
-    export_json(ranked, args.json_out)
     client = get_trading_client()
     account = client.get_account()
     print(f"Account status={account.status} buying_power={account.buying_power}")
@@ -132,6 +173,17 @@ def main() -> None:
         print("Market is closed. Skipping order due to --require-market-open.")
         return
 
+    if already_bought_today(client):
+        print("Already placed the opening buy today. No trade placed.")
+        return
+
+    ranked = build_rankings(top_n=50)
+    if ranked.empty:
+        print("No ranked candidates available. No trade placed.")
+        return
+
+    export_json(ranked, args.json_out)
+
     trades_payload = export_trades_json(client, args.trades_json_out)
     print(
         "Trade report updated: "
@@ -139,20 +191,7 @@ def main() -> None:
         f"unrealized=${trades_payload['summary']['unrealizedPnl']:.2f}"
     )
 
-    # Pick the highest-ranked symbol that has not already been bought today.
-    selected_row = None
-    for _, row in ranked.iterrows():
-        candidate_symbol = str(row["Ticker"])
-        if already_bought_today(client, candidate_symbol):
-            print(f"Already bought {candidate_symbol} today. Checking next-ranked candidate...")
-            continue
-        selected_row = row
-        break
-
-    if selected_row is None:
-        print("All ranked candidates were already bought today. No trade placed.")
-        return
-
+    selected_row = ranked.iloc[0]
     symbol = str(selected_row["Ticker"])
     bounce_prob = float(selected_row["BounceProb"])
     print(f"Top eligible pick: {symbol} | BounceProb={bounce_prob:.1f}% | Return={selected_row['Return']:.2f}%")
@@ -165,9 +204,24 @@ def main() -> None:
     tp_pct = float(args.take_profit_pct)
     sl_pct = float(args.stop_loss_pct)
     use_bracket = tp_pct > 0 and sl_pct > 0
+    notional = float(args.notional)
+
+    ref_price = None
+    if notional > 0 or use_bracket:
+        ref_price = get_reference_price(symbol)
+
+    if notional > 0:
+        qty = shares_for_notional(ref_price, notional)
+        print(
+            f"Order size: {qty} shares of {symbol} at ref ${ref_price:.2f} "
+            f"(~${qty * ref_price:.2f}, target ${notional:.0f})"
+        )
+    else:
+        qty = int(args.shares)
+        if qty < 1:
+            raise RuntimeError("Set --notional above 0 or --shares to at least 1.")
 
     if use_bracket:
-        ref_price = get_reference_price(symbol)
         take_profit_price = round(ref_price * (1 + (tp_pct / 100.0)), 2)
         stop_loss_price = round(ref_price * (1 - (sl_pct / 100.0)), 2)
         if stop_loss_price <= 0 or take_profit_price <= stop_loss_price:
@@ -180,7 +234,7 @@ def main() -> None:
         )
         order_data = MarketOrderRequest(
             symbol=symbol,
-            qty=args.shares,
+            qty=qty,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.DAY,
             order_class=OrderClass.BRACKET,
@@ -189,16 +243,25 @@ def main() -> None:
         )
     else:
         print("TP/SL bracket disabled (take-profit or stop-loss percent <= 0).")
-        order_data = MarketOrderRequest(
-            symbol=symbol,
-            qty=args.shares,
-            side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY,
-        )
+        if notional > 0:
+            order_data = MarketOrderRequest(
+                symbol=symbol,
+                notional=round(notional, 2),
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+            )
+        else:
+            order_data = MarketOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+            )
 
     if args.dry_run:
+        size = f"${notional:.0f}" if notional > 0 else f"{qty} shares"
         print(
-            f"[DRY RUN] Would place order: BUY {args.shares} {symbol}"
+            f"[DRY RUN] Would place order: BUY {size} of {symbol} ({qty} shares)"
             + (" with BRACKET exits" if use_bracket else "")
         )
         return

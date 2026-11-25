@@ -47,7 +47,7 @@ ALLOWED_ORIGINS=http://localhost:5173
 Manual run:
 
 ```bash
-.venv/bin/python trade_top_pick.py --shares 100 --min-prob 55 --require-market-open
+.venv/bin/python trade_top_pick.py --notional 2000 --min-prob 55 --require-market-open
 ```
 
 ## Render Deployment
@@ -55,7 +55,10 @@ Manual run:
 This repo includes `render.yaml` with:
 
 - `ai-bounce-finder` (single Python service that also serves built UI)
-- `ai-bounce-finder-daily-trade` (cron job at 13:30 UTC weekdays = 8:30 AM ET standard time)
+- `ai-bounce-finder-daily-trade` (weekdays at 14:31 UTC = 9:31 AM ET standard time)
+- `ai-bounce-finder-daily-trade-dst` (weekdays at 13:31 UTC = 9:31 AM ET daylight time)
+
+Render cron is UTC and cannot follow US daylight saving by itself. Both jobs run every weekday. Each invocation buys only when the market is open and no buy has been placed yet that market day, so the early run is a no-op and the later run places the single ~$2,000 order at the open.
 
 On Render, configure secrets:
 
@@ -69,5 +72,5 @@ On Render, configure secrets:
 Cron is already defined in `render.yaml` and runs:
 
 ```bash
-python trade_top_pick.py --shares 100 --require-market-open
+python trade_top_pick.py --notional 2000 --take-profit-pct 7 --stop-loss-pct 3.5 --require-market-open
 ```
