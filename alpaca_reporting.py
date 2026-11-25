@@ -1,10 +1,16 @@
 import json
+import os
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from typing import Optional
 from pathlib import Path
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
+
+# Ignore fills before this instant so the dashboard P/L starts clean.
+# Override with PNL_RESET_AT (ISO-8601) if you want a different cutoff.
+_DEFAULT_PNL_RESET_AT = "2026-11-25T00:00:00-06:00"
 
 
 def _to_float(value, default: float = 0.0) -> float:
@@ -22,6 +28,33 @@ def _norm_enum(value) -> str:
     if "." in text:
         text = text.split(".")[-1]
     return text
+
+
+def _pnl_reset_at() -> datetime:
+    raw = os.getenv("PNL_RESET_AT", _DEFAULT_PNL_RESET_AT).strip()
+    reset_at = datetime.fromisoformat(raw)
+    if reset_at.tzinfo is None:
+        reset_at = reset_at.replace(tzinfo=timezone.utc)
+    return reset_at
+
+
+def _order_timestamp(order) -> Optional[datetime]:
+    stamp = getattr(order, "filled_at", None) or getattr(order, "submitted_at", None)
+    if stamp is None:
+        return None
+    if stamp.tzinfo is None:
+        return stamp.replace(tzinfo=timezone.utc)
+    return stamp
+
+
+def _since_reset(orders):
+    reset_at = _pnl_reset_at()
+    kept = []
+    for order in orders:
+        stamp = _order_timestamp(order)
+        if stamp is not None and stamp >= reset_at:
+            kept.append(order)
+    return kept
 
 
 def _compute_realized_pnl(filled_orders):
@@ -77,7 +110,7 @@ def _compute_realized_pnl(filled_orders):
 
 def export_trades_json(client: TradingClient, output_path: str = "ui/public/trades.json") -> dict:
     req = GetOrdersRequest(status="all", limit=500, nested=False)
-    orders = client.get_orders(filter=req)
+    orders = _since_reset(client.get_orders(filter=req))
     orders_sorted = sorted(
         orders,
         key=lambda o: getattr(o, "submitted_at", datetime.min.replace(tzinfo=timezone.utc)),
