@@ -251,7 +251,7 @@ function App() {
                 <ul className="plan-list">
                   <li>Fully automated pipeline runs each morning with no manual stock selection.</li>
                   <li>The model refreshes and caches the ranked bounce candidates automatically.</li>
-                  <li>At the open, the system buys about $2,000 of the highest bounce-probability loser.</li>
+                  <li>At the open, the system buys about $5,000 of the highest bounce-probability loser.</li>
                   <li>Bracket exits are auto-attached: 7% take-profit and 3.5% stop-loss.</li>
                   <li>Only one opening buy is placed per market day.</li>
                   <li>P/L, open positions, and order history update automatically in the dashboard.</li>

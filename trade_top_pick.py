@@ -109,13 +109,13 @@ def get_reference_price(symbol: str) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Buy about $2,000 of the top bounce-ranked loser once per market day."
+        description="Buy about $5,000 of the top bounce-ranked loser once per market day."
     )
     parser.add_argument(
         "--notional",
         type=float,
-        default=2000.0,
-        help="Dollar amount to buy (default: 2000). Set <=0 to use --shares instead.",
+        default=5000.0,
+        help="Dollar amount to buy (default: 5000). Set <=0 to use --shares instead.",
     )
     parser.add_argument(
         "--shares",
